@@ -179,3 +179,12 @@ def conv2shear(k, lmax=None, pixwin=None):
     g1, g2 = Alm2MapSpin.apply(gelm, gblm, nside, lmax)
 
     return g1, g2
+
+def filter(k, lmax=None, pixwin=None):
+    nside = hp.npix2nside(len(k))
+
+    kelm = Map2Alm.apply(k, lmax)
+
+    if pixwin is not None:
+        kelm = kelm * pixwin
+    return Alm2Map.apply(kelm,nside,lmax)
