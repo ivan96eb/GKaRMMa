@@ -1,21 +1,21 @@
 analysis:
-    nbins: 4
-    nside: 256 
-    sigma_e: 0.261
-    shift: 0.00416708,0.0085054,0.01561475,0.0236787 
-    vargauss: 0.18815055,0.14421919,0.1114475,0.06784224
-    cl_file: data/des_y3/cl.npy
-    pixwin: data/healpix/hybrid_pixwin_256.npy
-
-io:     
-    datafile: data/des_y3/desy3_shear_data.h5
-    io_dir: output/des_y3/
-    maskfile: data/des_y3/mask_desy3.fits
-    x_init_file: output/des_y3/kappa_MAP.h5
-    
+  nbins: 2
+  nside: 256
+  shift: 1.0,1.0
+  vargauss: 0.02825469904152235,0.020759280651486467
+  ng_average: 20.00,20.00
+  cl_file: ./data/cl.npy
+  pixwin: healpix
+io:
+  datafile: ./data/data_with_pixelazation_and_lpf.h5
+  io_dir: ./GKaRMMa_data/test_run/
+  maskfile: ./data/mask.npy
+  x_init_file: None
 mcmc:
-    n_burn_in: 200
-    n_samples: 200
-    step_size: 0.2
-    custom_mass_matrix: true
+  n_burn_in: 200
+  n_samples: 200
+  step_size: 0.2
+  vargauss_training_data_path: ./data/vargauss_training_data.pt
+  y_cl_training_data_path: ./data/y_cl_training_data.pt
+ 
     
