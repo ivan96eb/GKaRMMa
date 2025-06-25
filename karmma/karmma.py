@@ -4,7 +4,8 @@ import torch
 import pyro
 import pyro.distributions as dist
 from pyro.infer import MCMC, NUTS
-from .transforms import Alm2Map, conv2shear
+from .transforms import Alm2Map, conv2shear, filter
+from .emulator import ClEmu,LNParamsEmu
 import pickle
 from joblib import Parallel, delayed
 from scipy.special import eval_legendre
@@ -13,26 +14,24 @@ from joblib import Parallel, delayed
 ##==================================
 
 class KarmmaSampler:
-    def __init__(self, g1_obs, g2_obs, sigma_obs, mask, cl, shift, vargauss, lmax=None, gen_lmax=None, pixwin=None):
-        self.g1_obs = g1_obs       
-        self.g2_obs = g2_obs
-        self.N_Z_BINS = g1_obs.shape[0]
-        self.sigma_obs = sigma_obs
+    def __init__(self, Ng_obs, mask, cl, ng_average,y_cl_training_data_path,vargauss_training_data_path, lmax=None, gen_lmax=None ,pixwin=None):
+        self.ng_average = ng_average
+        self.Ng_obs = Ng_obs       
+        self.N_Z_BINS = Ng_obs.shape[0]
         self.mask = mask.astype(bool)
         self.cl = cl
-        self.shift    = shift
-        self.vargauss = vargauss
+        self.shift    = []
+        self.vargauss = []
+        self.y_cl     = []
+        self.mu = []
 
-        self.y_cl     = np.zeros_like(cl)
-        
-        self.mu = np.zeros(self.N_Z_BINS)
-
-        self.nside = hp.get_nside(self.g1_obs)
+        self.nside = hp.get_nside(self.Ng_obs)
         self.lmax = 2 * self.nside if not lmax else lmax
-        self.gen_lmax = 3 * self.nside - 1 if not gen_lmax else gen_lmax
-        
+        self.gen_lmax = 3 * self.nside - 1 if not gen_lmax else gen_lmax     
         self.ell, self.emm = hp.Alm.getlm(self.gen_lmax)
-       
+
+        self.train_emulator(y_cl_training_data_path,vargauss_training_data_path)
+        
         if pixwin is not None:
             print("Using healpix pixel window function.")
             from scipy.interpolate import interp1d
@@ -48,44 +47,23 @@ class KarmmaSampler:
         else:
             self.pixwin_ell_filter = None
 
-        self.compute_lognorm_cl()
 
         theta_fid = np.array([0.233, 0.82])[np.newaxis]
         theta_fid = torch.Tensor(theta_fid).to(torch.double)
-        self.y_cl_fid = self.y_cl
+
         self.tensorize()
     
     def tensorize(self):
-        self.g1_obs = torch.tensor(self.g1_obs)
-        self.g2_obs = torch.tensor(self.g2_obs)
-        self.sigma_obs = torch.tensor(self.sigma_obs)
+        self.Ng_obs = torch.tensor(self.Ng_obs)
         self.mask = torch.tensor(self.mask)
         self.cl = torch.Tensor(self.cl)
-        self.y_cl = torch.tensor(self.y_cl)
 
-    def compute_lognorm_cl_at_ell(self, mu, w, integrand, ell):
-        xi_g = np.log(np.polynomial.legendre.legval(mu, integrand) + 1)
-        return 2 * np.pi * np.sum(w * xi_g * eval_legendre(ell, mu))
+    def train_emulator(self, ycl_file,vargauss_file):
+        self.cl_emu = ClEmu(torch.load(ycl_file))
+        self.cl_emu.fit_params()    
 
-    def compute_lognorm_cl(self, order=2):
-        mu, w = np.polynomial.legendre.leggauss(order * self.gen_lmax)
-        
-        print("Computing mu/sigma2....")
-        for i in range(self.N_Z_BINS):           
-            self.mu[i] = np.log(self.shift[i]) - 0.5 * self.vargauss[i]            
-        
-        print("Computing y_cl...")
-        for i in range(self.N_Z_BINS):    
-            for j in range(i+1):
-                print("z-bin i: %d, j: %d"%(i,j))
-                integrand = ((2 * np.arange(self.gen_lmax + 1) + 1) * self.cl[i,j] / (4 * np.pi * self.shift[i] * self.shift[j]))
-
-                ycl_ij = np.array(Parallel(n_jobs=-1)(
-            delayed(self.compute_lognorm_cl_at_ell)(mu, w, integrand, ell) for ell in range(self.gen_lmax + 1)))
-                self.y_cl[i,j] = ycl_ij
-                self.y_cl[j,i] = ycl_ij
-                
-        self.y_cl[:,:,:2]  = np.tile(1e-20 * np.eye(self.N_Z_BINS)[:,:,np.newaxis], (1,1,2))
+        self.vargauss_emu = LNParamsEmu(torch.load(vargauss_file))
+        self.vargauss_emu.fit_params()
 
     def get_xlm(self, xlm_real, xlm_imag):
         ell, emm = hp.Alm.getlm(self.gen_lmax)
@@ -130,34 +108,53 @@ class KarmmaSampler:
                                                        torch.ones(self.N_Z_BINS, ((ell > 1) & (emm > 0)).sum(), dtype=torch.double)))
           
         xlm = self.get_xlm(xlm_real, xlm_imag)
-        y_cl = self.y_cl
-        
-        ylm = self.apply_cl(xlm, y_cl)
-       
-        for i in range(self.N_Z_BINS):
-            k = torch.exp(self.mu[i] + Alm2Map.apply(ylm[i], self.nside, self.gen_lmax)) - self.shift[i]
-            g1, g2 = conv2shear(k, self.lmax, self.pixwin_ell_filter)
 
-            pyro.sample(f'g1_obs_{i}', dist.Normal(g1[self.mask], self.sigma_obs[i,self.mask]), obs=self.g1_obs[i,self.mask])
-            pyro.sample(f'g2_obs_{i}', dist.Normal(g2[self.mask], self.sigma_obs[i,self.mask]), obs=self.g2_obs[i,self.mask])
-    
-    def sample(self, num_burn, num_samples, step_size=0.05, inv_mass_matrix=None, x_init=None):
+        cosmo = pyro.sample('cosmo', dist.Uniform(torch.tensor([0.25, 0.7],dtype=torch.double),
+                                                      torch.tensor([0.4, 0.9],dtype=torch.double)))
+        
+        bg = pyro.sample('bg', dist.Uniform(0.7*torch.ones(self.N_Z_BINS, dtype=torch.double), 
+                                            1.3*torch.ones(self.N_Z_BINS, dtype=torch.double)))
+
+        y_cl = self.cl_emu.predict(cosmo).reshape((1,self.N_Z_BINS,self.N_Z_BINS,-1))[0] 
+
+        ylm = self.apply_cl(xlm, y_cl)
+        shift = torch.ones(self.N_Z_BINS)
+        vargauss = self.vargauss_emu.predict(cosmo)[0]
+        mu = torch.zeros(self.N_Z_BINS)
+        for i in range(self.N_Z_BINS):
+            mu[i] = torch.log(shift[i]) - 0.5 * vargauss[i]
+
+        for i in range(self.N_Z_BINS):
+            delta_g = torch.exp(mu[i] + Alm2Map.apply(ylm[i], self.nside, self.gen_lmax)) - shift[i]
+            delta_g = filter(delta_g,self.lmax,self.pixwin_ell_filter)
+            Ng = self.ng_average[i]*(1.+bg[i] * delta_g)
+            pyro.sample(f'Ng_obs_{i}', dist.Poisson(Ng[self.mask]), obs=self.Ng_obs[i,self.mask])
+           
+        
+    def sample(self, num_burn, num_samples,step_size=0.05, x_init=None,bg_init=None,cosmo_init=None,adapt_mass_mat=True):
         kernel = NUTS(self.model, target_accept_prob=0.65, step_size=step_size)
-        if inv_mass_matrix is not None:
-            kernel.mass_matrix_adapter.inverse_mass_matrix = inv_mass_matrix
+
         x_real_init = 0.3 * torch.randn((self.N_Z_BINS, (self.ell > 1).sum()), dtype=torch.double)
         x_imag_init = 0.3 * torch.randn((self.N_Z_BINS, ((self.ell > 1) & (self.emm > 0)).sum()), dtype=torch.double)
+        bg_init = torch.ones(self.N_Z_BINS, dtype=torch.double)
+        cosmo_init = torch.tensor([0.325,0.8], dtype=torch.double)
+
         if x_init is not None:
+            print('Initialization file found...')
             xlm_real_init, xlm_imag_init = x_init
+            bg_init = torch.tensor(bg_init, dtype=torch.double)
+            cosmo_init = torch.tensor(cosmo_init, dtype=torch.double)
             xlm_real_init = torch.tensor(xlm_real_init, dtype=torch.double)
             xlm_imag_init = torch.tensor(xlm_imag_init, dtype=torch.double)
-
+        
         mcmc = MCMC(kernel, num_samples=num_samples, warmup_steps=num_burn,
-                    initial_params={"xlm_real": x_real_init,
-                                    "xlm_imag": x_imag_init})
+                    initial_params={"bg": bg_init,
+                                    "cosmo": cosmo_init,
+                                    "xlm_imag": x_imag_init,
+                                    "xlm_real": x_real_init
+                                    })
         mcmc.run()
         self.samps = mcmc.get_samples()
-
         return self.samps, mcmc.kernel
 
     def save_samples(self, fname):
