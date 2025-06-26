@@ -14,21 +14,19 @@ from joblib import Parallel, delayed
 ##==================================
 
 class KarmmaSampler:
-    def __init__(self, Ng_obs, mask, cl, ng_average,y_cl_training_data_path,vargauss_training_data_path, lmax=None, gen_lmax=None ,pixwin=None):
+    def __init__(self, Ng_obs, mask, ng_average,y_cl_training_data_path,vargauss_training_data_path, thetafid,bfid,lmax=None, gen_lmax=None ,pixwin=None):
         self.ng_average = ng_average
-        self.Ng_obs = Ng_obs       
-        self.N_Z_BINS = Ng_obs.shape[0]
-        self.mask = mask.astype(bool)
-        self.cl = cl
-        self.shift    = []
-        self.vargauss = []
-        self.y_cl     = []
-        self.mu = []
+        self.Ng_obs     = Ng_obs       
+        self.N_Z_BINS   = Ng_obs.shape[0]
+        self.mask       = mask.astype(bool)
 
-        self.nside = hp.get_nside(self.Ng_obs)
-        self.lmax = 2 * self.nside if not lmax else lmax
-        self.gen_lmax = 3 * self.nside - 1 if not gen_lmax else gen_lmax     
+        self.nside         = hp.get_nside(self.Ng_obs)
+        self.lmax          = 2 * self.nside if not lmax else lmax
+        self.gen_lmax      = 3 * self.nside - 1 if not gen_lmax else gen_lmax     
         self.ell, self.emm = hp.Alm.getlm(self.gen_lmax)
+
+        self.thetafid = thetafid
+        self.bfid     = bfid
 
         self.train_emulator(y_cl_training_data_path,vargauss_training_data_path)
         
@@ -47,16 +45,13 @@ class KarmmaSampler:
         else:
             self.pixwin_ell_filter = None
 
-
-        theta_fid = np.array([0.233, 0.82])[np.newaxis]
-        theta_fid = torch.Tensor(theta_fid).to(torch.double)
-
         self.tensorize()
     
     def tensorize(self):
-        self.Ng_obs = torch.tensor(self.Ng_obs)
-        self.mask = torch.tensor(self.mask)
-        self.cl = torch.Tensor(self.cl)
+        self.Ng_obs   = torch.tensor(self.Ng_obs)
+        self.mask     = torch.tensor(self.mask)
+        self.thetafid = torch.tensor(self.thetafid,dtype=torch.double)
+        self.bfid     = torch.tensor(self.bfid,dtype=torch.double)
 
     def train_emulator(self, ycl_file,vargauss_file):
         self.cl_emu = ClEmu(torch.load(ycl_file))
@@ -126,8 +121,8 @@ class KarmmaSampler:
 
         for i in range(self.N_Z_BINS):
             delta_g = torch.exp(mu[i] + Alm2Map.apply(ylm[i], self.nside, self.gen_lmax)) - shift[i]
-            delta_g = filter(delta_g,self.lmax,self.pixwin_ell_filter)
-            Ng = self.ng_average[i]*(1.+bg[i] * delta_g)
+            #delta_g = filter(delta_g,self.lmax,self.pixwin_ell_filter)
+            Ng      = self.ng_average[i]*(1.+bg[i] * delta_g)
             pyro.sample(f'Ng_obs_{i}', dist.Poisson(Ng[self.mask]), obs=self.Ng_obs[i,self.mask])
            
         
@@ -136,14 +131,15 @@ class KarmmaSampler:
 
         x_real_init = 0.3 * torch.randn((self.N_Z_BINS, (self.ell > 1).sum()), dtype=torch.double)
         x_imag_init = 0.3 * torch.randn((self.N_Z_BINS, ((self.ell > 1) & (self.emm > 0)).sum()), dtype=torch.double)
-        bg_init = torch.ones(self.N_Z_BINS, dtype=torch.double)
-        cosmo_init = torch.tensor([0.325,0.8], dtype=torch.double)
+        bg_init     = self.bfid
+        cosmo_init  = self.thetafid
 
         if x_init is not None:
             print('Initialization file found...')
             xlm_real_init, xlm_imag_init = x_init
-            bg_init = torch.tensor(bg_init, dtype=torch.double)
-            cosmo_init = torch.tensor(cosmo_init, dtype=torch.double)
+
+            bg_init       = torch.tensor(bg_init, dtype=torch.double)
+            cosmo_init    = torch.tensor(cosmo_init, dtype=torch.double)
             xlm_real_init = torch.tensor(xlm_real_init, dtype=torch.double)
             xlm_imag_init = torch.tensor(xlm_imag_init, dtype=torch.double)
         
