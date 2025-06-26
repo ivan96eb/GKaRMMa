@@ -4,13 +4,9 @@ import torch
 import pyro
 import pyro.distributions as dist
 from pyro.infer import MCMC, NUTS
-from .transforms import Alm2Map, conv2shear, filter
+from .transforms import Alm2Map, Map2Alm
 from .emulator import ClEmu,LNParamsEmu
 import pickle
-from joblib import Parallel, delayed
-from scipy.special import eval_legendre
-##==================================
-from joblib import Parallel, delayed
 ##==================================
 
 class KarmmaSampler:
@@ -109,21 +105,23 @@ class KarmmaSampler:
         
         bg = pyro.sample('bg', dist.Uniform(0.7*torch.ones(self.N_Z_BINS, dtype=torch.double), 
                                             1.3*torch.ones(self.N_Z_BINS, dtype=torch.double)))
-
-        y_cl = self.cl_emu.predict(cosmo).reshape((1,self.N_Z_BINS,self.N_Z_BINS,-1))[0] 
-
-        ylm = self.apply_cl(xlm, y_cl)
-        shift = torch.ones(self.N_Z_BINS)
+        
         vargauss = self.vargauss_emu.predict(cosmo)[0]
+        shift = torch.ones(self.N_Z_BINS)
         mu = torch.zeros(self.N_Z_BINS)
         for i in range(self.N_Z_BINS):
             mu[i] = torch.log(shift[i]) - 0.5 * vargauss[i]
-
+        y_cl = self.cl_emu.predict(cosmo).reshape((1,self.N_Z_BINS,self.N_Z_BINS,-1))[0]
+        ylm = self.apply_cl(xlm, y_cl)
         for i in range(self.N_Z_BINS):
-            delta_g = torch.exp(mu[i] + Alm2Map.apply(ylm[i], self.nside, self.gen_lmax)) - shift[i]
-            #delta_g = filter(delta_g,self.lmax,self.pixwin_ell_filter)
-            Ng      = self.ng_average[i]*(1.+bg[i] * delta_g)
-            pyro.sample(f'Ng_obs_{i}', dist.Poisson(Ng[self.mask]), obs=self.Ng_obs[i,self.mask])
+            delta_m    = torch.exp(mu[i] + Alm2Map.apply(ylm[i], self.nside, self.gen_lmax)) - shift[i]
+            delta_g    = bg[i]*delta_m
+            delta_g_lm = Map2Alm.apply(delta_g, self.lmax)
+            delta_g_lp = Alm2Map.apply(delta_g_lm, self.nside, self.lmax)
+            Ng         = self.ng_average[i]*(1.+delta_g_lp)
+            Ng_lm      = Map2Alm.apply(Ng, self.lmax)
+            Ng_pix     = Alm2Map.apply(Ng_lm*self.pixwin_ell_filter, self.nside, self.lmax)
+            pyro.sample(f'Ng_obs_{i}', dist.Poisson(Ng_pix[self.mask]), obs=self.Ng_obs[i,self.mask])
            
         
     def sample(self, num_burn, num_samples,step_size=0.05, x_init=None,bg_init=None,cosmo_init=None,adapt_mass_mat=True):
