@@ -14,27 +14,21 @@ torch.set_num_threads(16)
 configfile = sys.argv[1]
 config     = KarmmaConfig(configfile)
 
-nside    = config.analysis['nside']
-gen_lmax = 3 * nside - 1
-lmax     = 2 * nside
-
-N_Z_BINS = config.analysis['nbins']
-shift    = config.analysis['shift']
-vargauss = config.analysis['vargauss']
+nside      = config.analysis['nside']
+gen_lmax   = 3 * nside - 1
+lmax       = 2 * nside
+N_Z_BINS   = config.analysis['nbins']
 ng_average = config.analysis['ng_average']
-
-cl     = config.analysis['cl'][:,:,:(gen_lmax + 1)]
-
-pixwin = config.analysis['pixwin']
-
+pixwin     = config.analysis['pixwin']
+thetafid   = config.analysis['thetafid']
+bfid       = config.analysis['bfid']
+Ng_obs     = config.data['Ng_obs']
+mask       = config.data['mask']
 #============= Load data =======================
-Ng_obs = config.data['Ng_obs']
-mask   = config.data['mask']
-
 assert nside==hp.npix2nside(mask.shape[0]), 'Problem with nside!'
 
 print("Initializing sampler....")
-sampler = KarmmaSampler(Ng_obs, mask, cl, ng_average,config.y_cl_training_data_path,config.vargauss_training_data_path,lmax, gen_lmax,pixwin=pixwin)
+sampler = KarmmaSampler(Ng_obs, mask, ng_average,config.y_cl_training_data_path,config.vargauss_training_data_path,thetafid,bfid,lmax, gen_lmax,pixwin=pixwin)
      
 print("Done initializing sampler....")
 
