@@ -163,23 +163,23 @@ def low_pass_filter(map):
         map_lp[i]        = hp.alm2map(map_lm,nside=nside)
     return map_lp
 
-def get_Ng(delta_g,N_gals_average,boolean_mask):
+def pixelize(map,pixwin):
+    #nbins  = map.shape[0]
+    nside  = hp.npix2nside(map.shape[0])
+    lmax   = 2*nside
+    alm       = hp.map2alm(map,lmax=lmax)
+    alm_pix   = alm*pixwin
+    pixmap = hp.alm2map(alm_pix,nside)
+    return pixmap
+
+def get_Ng(delta_g,N_gals_average,boolean_mask,pixwin):
     nbins = delta_g.shape[0]
     Ng    = np.zeros_like(delta_g)
     for i in range(nbins):
-        Ng[i][boolean_mask] = np.random.poisson(N_gals_average[i]*(1.+delta_g[i][boolean_mask]))
+        Ng[i][boolean_mask] = np.random.poisson(pixelize(N_gals_average[i]*(1.+delta_g[i]),pixwin))[boolean_mask]
     return Ng
 
-def pixelize(map,pixwin):
-    nbins  = map.shape[0]
-    nside  = hp.npix2nside(map.shape[1])
-    lmax   = 2*nside
-    pixmap = np.zeros_like(map)
-    for i in range(nbins):
-        alm       = hp.map2alm(map[i],lmax=lmax)
-        alm_pix   = alm*pixwin
-        pixmap[i] = hp.alm2map(alm_pix,nside)
-    return pixmap
+
 
 def save_datafile(N_gals,mask,delta_g,cosmo,bg,xlm,outpath):
     hf = h5.File(outpath, 'w')

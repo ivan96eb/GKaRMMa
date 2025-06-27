@@ -33,9 +33,9 @@ ycl        = sampler.cl_emu.predict(cosmofid).reshape((1,nbins,nbins,-1))[0].num
 y_maps,xlm = mock.get_GRF(ycl,nside,nbins,gen_lmax)
 delta_m    = mock.get_LNRF(y_maps,shift,mu)
 delta_g    = mock.apply_bias(delta_m,bfid)
-delta_g_lp = mock.low_pass_filter(delta_g)
-Ng         = mock.get_Ng(delta_g_lp,N_gals_average,boolean_mask)
-Ng_pix     = mock.pixelize(Ng,sampler.pixwin_ell_filter.numpy())
+#delta_g_lp = mock.low_pass_filter(delta_g)
+Ng         = mock.get_Ng(delta_g,N_gals_average,boolean_mask,sampler.pixwin_ell_filter.numpy())
+
 # ====== Saving...
 print('Saving...')
-mock.save_datafile(Ng_pix,mask,delta_g,config.thetafid,config.bfid,xlm,config.datafile)
+mock.save_datafile(Ng,mask,delta_g,config.thetafid,config.bfid,xlm,config.datafile)
