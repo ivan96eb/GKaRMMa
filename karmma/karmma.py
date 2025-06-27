@@ -42,7 +42,8 @@ class KarmmaSampler:
             self.pixwin_ell_filter = None
 
         self.tensorize()
-    
+        self.emu_upper_bound = self.cl_emu.emu[0].cosmology_max
+        self.emu_lower_bound = self.cl_emu.emu[0].cosmology_min
     def tensorize(self):
         self.Ng_obs   = torch.tensor(self.Ng_obs)
         self.mask     = torch.tensor(self.mask)
@@ -100,11 +101,10 @@ class KarmmaSampler:
           
         xlm      = self.get_xlm(xlm_real, xlm_imag)
 
-        cosmo    = pyro.sample('cosmo', dist.Uniform(torch.tensor([0.25, 0.7],dtype=torch.double),
-                                                      torch.tensor([0.4, 0.9],dtype=torch.double)))
+        cosmo    = pyro.sample('cosmo', dist.Uniform(torch.tensor(self.emu_lower_bound,dtype=torch.double),
+                                                      torch.tensor(self.emu_upper_bound,dtype=torch.double)))
         
-        bg       = pyro.sample('bg', dist.Uniform(0.7*torch.ones(self.N_Z_BINS, dtype=torch.double), 
-                                            1.3*torch.ones(self.N_Z_BINS, dtype=torch.double)))
+        bg       = pyro.sample('bg',dist.Uniform(0.7*self.bfid, 1.3*self.bfid))
         
         vargauss = self.vargauss_emu.predict(cosmo)[0]
         shift    = torch.ones(self.N_Z_BINS)
